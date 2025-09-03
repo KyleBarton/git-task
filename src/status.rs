@@ -1,6 +1,6 @@
 use nu_ansi_term::AnsiString;
 use serde::{Deserialize, Serialize};
-
+use gittask::TaskContext;
 use crate::util::str_to_color;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -36,14 +36,16 @@ impl Status {
 
 pub struct StatusManager {
     statuses: Vec<Status>,
+    context: TaskContext,
 }
 
 impl StatusManager {
-    pub fn new() -> StatusManager {
-        let statuses = read_config().unwrap_or_else(|_| Self::get_defaults());
+    pub fn new(context: &TaskContext, ) -> StatusManager {
+        let statuses = read_config(&context).unwrap_or_else(|_| Self::get_defaults());
 
         StatusManager {
-            statuses
+            statuses,
+            context: context.clone(),
         }
     }
 
@@ -83,7 +85,7 @@ impl StatusManager {
             true => Err("Status name and shortcut can't contain comma".to_string()),
             false => {
                 self.statuses = statuses;
-                save_config(&self.statuses)
+                save_config(&self.context, &self.statuses)
             }
         }
     }
@@ -105,7 +107,7 @@ impl StatusManager {
             is_done,
         };
         self.statuses.push(status);
-        save_config(&self.statuses)
+        save_config(&self.context, &self.statuses)
     }
 
     pub fn delete_status(&mut self, name: String) -> Result<(), String> {
@@ -113,7 +115,7 @@ impl StatusManager {
         self.statuses.retain(|s| s.name != name);
         match prev_status_count == self.statuses.len() {
             true => Err("Status not found".to_string()),
-            false => save_config(&self.statuses),
+            false => save_config(&self.context, &self.statuses),
         }
     }
 
@@ -137,14 +139,14 @@ impl StatusManager {
     }
 
     pub fn get_starting_status(&self) -> String {
-        match gittask::get_config_value("task.status.open") {
+        match self.context.get_config_value("task.status.open") {
             Ok(s) => s,
             _ => self.statuses.first().unwrap().name.clone()
         }
     }
 
     pub fn get_in_progress_status(&self) -> Option<String> {
-        match gittask::get_config_value("task.status.in_progress") {
+        match self.context.get_config_value("task.status.in_progress") {
             Ok(s) => Some(s),
             _ => {
                 if self.statuses.len() == 3 {
@@ -167,7 +169,7 @@ impl StatusManager {
     }
 
     pub fn get_final_status(&self) -> String {
-        match gittask::get_config_value("task.status.closed") {
+        match self.context.get_config_value("task.status.closed") {
             Ok(s) => s,
             _ => {
                 self.statuses.iter().find_map(|saved_status| {
@@ -243,7 +245,7 @@ impl StatusManager {
                 };
                 match set_result {
                     Ok(prev_value) => {
-                        match save_config(&self.statuses) {
+                        match save_config(&self.context, &self.statuses) {
                             Ok(_) => Ok(prev_value),
                             Err(e) => Err(e)
                         }
@@ -256,16 +258,16 @@ impl StatusManager {
     }
 }
 
-fn read_config() -> Result<Vec<Status>, String> {
-    match gittask::get_config_value("task.statuses") {
+fn read_config(context: &TaskContext, ) -> Result<Vec<Status>, String> {
+    match context.get_config_value("task.statuses") {
         Ok(s) => parse_statuses(s),
         Err(e) => Err(e)
     }
 }
 
-fn save_config(statuses: &Vec<Status>) -> Result<(), String> {
+fn save_config(context: &TaskContext, statuses: &Vec<Status>) -> Result<(), String> {
     let statuses = serde_json::to_string(&statuses).map_err(|_| "Could not serialize statuses".to_string())?;
-    match gittask::set_config_value("task.statuses", &statuses) {
+    match context.set_config_value("task.statuses", &statuses) {
         Ok(_) => Ok(()),
         Err(e) => Err(e)
     }

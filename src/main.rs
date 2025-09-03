@@ -9,7 +9,7 @@ extern crate gittask;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-
+use gittask::TaskContext;
 use crate::operations::{task_clear, task_create, task_delete, task_edit, task_export, task_get, task_import, task_list, task_pull, task_push, task_replace, task_set, task_show, task_stats, task_status, task_unset};
 use crate::operations::comment::*;
 use crate::operations::config::*;
@@ -642,99 +642,103 @@ enum PropertiesCondFormatCommand {
 fn main() -> ExitCode {
     let _ = enable_ansi_support::enable_ansi_support();
     let args = Args::parse();
+    let context = TaskContext::new(".".to_string());
     let success = match args.command {
-        Some(Command::List { status, keyword, from, until, author, columns, sort, limit, no_color }) => task_list(status, keyword, from, until, author, columns, sort, limit, no_color),
-        Some(Command::Show { id, no_color }) => task_show(id, no_color),
-        Some(Command::Create { name, description, no_desc, push, remote, connector_type: connector }) => task_create(name, description, no_desc, push, &remote, &connector),
-        Some(Command::Status { ids, status, push, remote, connector_type: connector, no_color }) => task_status(ids, status, push, &remote, &connector, no_color),
-        Some(Command::Get { id, prop_name }) => task_get(id, prop_name),
-        Some(Command::Set { ids, prop_name, value, push, remote, connector_type: connector, no_color }) => task_set(ids, prop_name, value, push, &remote, &connector, no_color),
-        Some(Command::Replace { ids, prop_name, search, replace, regex, push, remote, connector_type: connector, no_color }) => task_replace(ids, prop_name, search, replace, regex, push, &remote, &connector, no_color),
-        Some(Command::Unset { ids, prop_name }) => task_unset(ids, prop_name),
-        Some(Command::Edit { id, prop_name }) => task_edit(id, prop_name),
-        Some(Command::Comment { subcommand }) => task_comment(subcommand),
-        Some(Command::Label { subcommand }) => task_label(subcommand),
-        Some(Command::Import { ids, format }) => task_import(ids, format),
-        Some(Command::Export { ids, status, limit, format, pretty }) => task_export(ids, status, limit, format, pretty),
-        Some(Command::Pull { ids, limit, status, remote, connector_type: connector, no_comments, no_labels }) => task_pull(ids, limit, status, &remote, &connector, no_comments, no_labels),
-        Some(Command::Push { ids, remote, connector_type: connector, no_comments, no_labels, no_color }) => task_push(ids, &remote, &connector, no_comments, no_labels, no_color),
-        Some(Command::Stats { no_color }) => task_stats(no_color),
-        Some(Command::Delete { ids, status, push, remote, connector_type: connector }) => task_delete(ids, status, push, &remote, &connector),
-        Some(Command::Clear) => task_clear(),
-        Some(Command::Config { subcommand }) => task_config(subcommand),
+        Some(Command::List { status, keyword, from, until, author, columns, sort, limit, no_color }) => task_list(&context, status, keyword, from, until, author, columns, sort, limit, no_color),
+        Some(Command::Show { id, no_color }) => task_show(&context, id, no_color),
+        Some(Command::Create { name, description, no_desc, push, remote, connector_type: connector }) => task_create(&context, name, description, no_desc, push, &remote, &connector),
+        Some(Command::Status { ids, status, push, remote, connector_type: connector, no_color }) => task_status(&context, ids, status, push, &remote, &connector, no_color),
+        Some(Command::Get { id, prop_name }) => task_get(&context, id, prop_name),
+        Some(Command::Set { ids, prop_name, value, push, remote, connector_type: connector, no_color }) => task_set(&context, ids, prop_name, value, push, &remote, &connector, no_color),
+        Some(Command::Replace { ids, prop_name, search, replace, regex, push, remote, connector_type: connector, no_color }) => task_replace(&context, ids, prop_name, search, replace, regex, push, &remote, &connector, no_color),
+        Some(Command::Unset { ids, prop_name }) => task_unset(&context, ids, prop_name),
+        Some(Command::Edit { id, prop_name }) => task_edit(&context, id, prop_name),
+        Some(Command::Comment { subcommand }) => task_comment(&context, subcommand),
+        Some(Command::Label { subcommand }) => task_label(&context, subcommand),
+        Some(Command::Import { ids, format }) => task_import(&context, ids, format),
+        Some(Command::Export { ids, status, limit, format, pretty }) => task_export(&context, ids, status, limit, format, pretty),
+        Some(Command::Pull { ids, limit, status, remote, connector_type: connector, no_comments, no_labels }) => task_pull(&context, ids, limit, status, &remote, &connector, no_comments, no_labels),
+        Some(Command::Push { ids, remote, connector_type: connector, no_comments, no_labels, no_color }) => task_push(&context, ids, &remote, &connector, no_comments, no_labels, no_color),
+        Some(Command::Stats { no_color }) => task_stats(&context, no_color),
+        Some(Command::Delete { ids, status, push, remote, connector_type: connector }) => task_delete(&context, ids, status, push, &remote, &connector),
+        Some(Command::Clear) => task_clear(&context),
+        Some(Command::Config { subcommand }) => task_config(&context, subcommand),
         None => false
     };
     if success { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-fn task_comment(subcommand: CommentCommand) -> bool {
+fn task_comment(
+    context: &TaskContext,
+    subcommand: CommentCommand
+) -> bool {
     match subcommand {
-        CommentCommand::Add { task_id, text, push, remote, connector_type: connector } => task_comment_add(task_id, text, push, &remote, &connector),
-        CommentCommand::Set { task_id, comment_id, text, push, remote, connector_type: connector } => task_comment_set(task_id, comment_id, text, push, &remote, &connector),
-        CommentCommand::Edit { task_id, comment_id, push, remote, connector_type: connector } => task_comment_edit(task_id, comment_id, push, &remote, &connector),
-        CommentCommand::Delete { task_id, comment_id, push, remote, connector_type: connector } => task_comment_delete(task_id, comment_id, push, &remote, &connector),
+        CommentCommand::Add { task_id, text, push, remote, connector_type: connector } => task_comment_add(&context, task_id, text, push, &remote, &connector),
+        CommentCommand::Set { task_id, comment_id, text, push, remote, connector_type: connector } => task_comment_set(&context, task_id, comment_id, text, push, &remote, &connector),
+        CommentCommand::Edit { task_id, comment_id, push, remote, connector_type: connector } => task_comment_edit(&context, task_id, comment_id, push, &remote, &connector),
+        CommentCommand::Delete { task_id, comment_id, push, remote, connector_type: connector } => task_comment_delete(&context, task_id, comment_id, push, &remote, &connector),
     }
 }
 
-fn task_label(subcommand: LabelCommand) -> bool {
+fn task_label(context: &TaskContext, subcommand: LabelCommand) -> bool {
     match subcommand {
-        LabelCommand::Add { task_id, name, color, description, push, remote, connector_type: connector } => task_label_add(task_id, name, color, description, push, &remote, &connector),
-        LabelCommand::Delete { task_id, name, push, remote, connector_type: connector } => task_label_delete(task_id, name, push, &remote, &connector),
+        LabelCommand::Add { task_id, name, color, description, push, remote, connector_type: connector } => task_label_add(&context, task_id, name, color, description, push, &remote, &connector),
+        LabelCommand::Delete { task_id, name, push, remote, connector_type: connector } => task_label_delete(&context, task_id, name, push, &remote, &connector),
     }
 }
 
-fn task_config(subcommand: ConfigCommand) -> bool {
+fn task_config(context: &TaskContext, subcommand: ConfigCommand) -> bool {
     match subcommand {
-        ConfigCommand::Get { param } => task_config_get(param),
-        ConfigCommand::Set { param, value, move_ref } => task_config_set(param, value, move_ref),
-        ConfigCommand::List => task_config_list(),
-        ConfigCommand::Status { subcommand } => task_config_status(subcommand),
-        ConfigCommand::Properties { subcommand } => task_config_properties(subcommand),
+        ConfigCommand::Get { param } => task_config_get(&context, param),
+        ConfigCommand::Set { param, value, move_ref } => task_config_set(&context, param, value, move_ref),
+        ConfigCommand::List => task_config_list(&context),
+        ConfigCommand::Status { subcommand } => task_config_status(&context, subcommand),
+        ConfigCommand::Properties { subcommand } => task_config_properties(&context, subcommand),
     }
 }
 
-fn task_config_status(subcommand: StatusCommand) -> bool {
+fn task_config_status(context: &TaskContext, subcommand: StatusCommand) -> bool {
     match subcommand {
-        StatusCommand::Add { name, shortcut, color, is_done } => task_config_status_add(name, shortcut, color, is_done),
-        StatusCommand::Delete { name, force } => task_config_status_delete(name, force),
-        StatusCommand::Get { name, param } => task_config_status_get(name, param),
-        StatusCommand::Set { name, param, value } => task_config_status_set(name, param, value),
-        StatusCommand::List => task_config_status_list(),
-        StatusCommand::Import => task_config_status_import(),
-        StatusCommand::Export { pretty } => task_config_status_export(pretty),
-        StatusCommand::Reset => task_config_status_reset(),
+        StatusCommand::Add { name, shortcut, color, is_done } => task_config_status_add(&context, name, shortcut, color, is_done),
+        StatusCommand::Delete { name, force } => task_config_status_delete(&context, name, force),
+        StatusCommand::Get { name, param } => task_config_status_get(&context, name, param),
+        StatusCommand::Set { name, param, value } => task_config_status_set(&context, name, param, value),
+        StatusCommand::List => task_config_status_list(&context),
+        StatusCommand::Import => task_config_status_import(&context),
+        StatusCommand::Export { pretty } => task_config_status_export(&context, pretty),
+        StatusCommand::Reset => task_config_status_reset(&context),
     }
 }
 
-fn task_config_properties(subcommand: PropertiesCommand) -> bool {
+fn task_config_properties(context: &TaskContext, subcommand: PropertiesCommand) -> bool {
     match subcommand {
-        PropertiesCommand::Add { name, value_type, color, style, enum_values, cond_format } => task_config_properties_add(name, value_type, color, style, enum_values, cond_format),
-        PropertiesCommand::Delete { name, force } => task_config_properties_delete(name, force),
-        PropertiesCommand::Get { name, param } => task_config_properties_get(name, param),
-        PropertiesCommand::Set { name, param, value } => task_config_properties_set(name, param, value),
-        PropertiesCommand::Enum { subcommand } => task_config_properties_enum(subcommand),
-        PropertiesCommand::CondFormat { subcommand } => task_config_properties_cond_format(subcommand),
-        PropertiesCommand::List => task_config_properties_list(),
-        PropertiesCommand::Import => task_config_properties_import(),
-        PropertiesCommand::Export { pretty } => task_config_properties_export(pretty),
-        PropertiesCommand::Reset => task_config_properties_reset(),
+        PropertiesCommand::Add { name, value_type, color, style, enum_values, cond_format } => task_config_properties_add(&context, name, value_type, color, style, enum_values, cond_format),
+        PropertiesCommand::Delete { name, force } => task_config_properties_delete(&context, name, force),
+        PropertiesCommand::Get { name, param } => task_config_properties_get(&context, name, param),
+        PropertiesCommand::Set { name, param, value } => task_config_properties_set(&context, name, param, value),
+        PropertiesCommand::Enum { subcommand } => task_config_properties_enum(&context, subcommand),
+        PropertiesCommand::CondFormat { subcommand } => task_config_properties_cond_format(&context, subcommand),
+        PropertiesCommand::List => task_config_properties_list(&context),
+        PropertiesCommand::Import => task_config_properties_import(&context),
+        PropertiesCommand::Export { pretty } => task_config_properties_export(&context, pretty),
+        PropertiesCommand::Reset => task_config_properties_reset(&context),
     }
 }
 
-fn task_config_properties_enum(subcommand: PropertiesEnumCommand) -> bool {
+fn task_config_properties_enum(context: &TaskContext, subcommand: PropertiesEnumCommand) -> bool {
     match subcommand {
-        PropertiesEnumCommand::List { name } => task_config_properties_enum_list(name),
-        PropertiesEnumCommand::Add { name, enum_value_name, enum_value_color, enum_value_style } => task_config_properties_enum_add(name, enum_value_name, enum_value_color, enum_value_style),
-        PropertiesEnumCommand::Get { property, enum_value_name, parameter } => task_config_properties_enum_get(property, enum_value_name, parameter),
-        PropertiesEnumCommand::Set { name, enum_value_name, enum_value_color, enum_value_style } => task_config_properties_enum_set(name, enum_value_name, enum_value_color, enum_value_style),
-        PropertiesEnumCommand::Delete { name, enum_value_name } => task_config_properties_enum_delete(name, enum_value_name),
+        PropertiesEnumCommand::List { name } => task_config_properties_enum_list(&context, name),
+        PropertiesEnumCommand::Add { name, enum_value_name, enum_value_color, enum_value_style } => task_config_properties_enum_add(&context, name, enum_value_name, enum_value_color, enum_value_style),
+        PropertiesEnumCommand::Get { property, enum_value_name, parameter } => task_config_properties_enum_get(&context, property, enum_value_name, parameter),
+        PropertiesEnumCommand::Set { name, enum_value_name, enum_value_color, enum_value_style } => task_config_properties_enum_set(&context, name, enum_value_name, enum_value_color, enum_value_style),
+        PropertiesEnumCommand::Delete { name, enum_value_name } => task_config_properties_enum_delete(&context, name, enum_value_name),
     }
 }
 
-fn task_config_properties_cond_format(subcommand: PropertiesCondFormatCommand) -> bool {
+fn task_config_properties_cond_format(context: &TaskContext, subcommand: PropertiesCondFormatCommand) -> bool {
     match subcommand {
-        PropertiesCondFormatCommand::List { name } => task_config_properties_cond_format_list(name),
-        PropertiesCondFormatCommand::Add { name, cond_format_expr, cond_format_color, cond_format_style } => task_config_properties_cond_format_add(name, cond_format_expr, cond_format_color, cond_format_style),
-        PropertiesCondFormatCommand::Clear { name } => task_config_properties_cond_format_clear(name),
+        PropertiesCondFormatCommand::List { name } => task_config_properties_cond_format_list(&context, name),
+        PropertiesCondFormatCommand::Add { name, cond_format_expr, cond_format_color, cond_format_style } => task_config_properties_cond_format_add(&context, name, cond_format_expr, cond_format_color, cond_format_style),
+        PropertiesCondFormatCommand::Clear { name } => task_config_properties_cond_format_clear(&context, name),
     }
 }

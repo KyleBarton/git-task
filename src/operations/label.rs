@@ -1,7 +1,9 @@
+use gittask::TaskContext;
 use crate::operations::get_user_repo;
 use crate::util::{error_message};
 
 pub(crate) fn task_label_add(
+    context: &TaskContext,
     task_id: String,
     name: String,
     color: Option<String>,
@@ -10,15 +12,15 @@ pub(crate) fn task_label_add(
     remote: &Option<String>,
     connector_type: &Option<String>,
 ) -> bool {
-    match gittask::find_task(&task_id) {
+    match context.find_task(&task_id) {
         Ok(Some(mut task)) => {
             let label = task.add_label(name.clone(), description.clone(), color.clone());
-            match gittask::update_task(task) {
+            match context.update_task(task) {
                 Ok(_) => {
                     println!("Task ID {task_id} updated");
                     let mut success = false;
                     if push {
-                        match get_user_repo(remote, connector_type) {
+                        match get_user_repo(&context, remote, connector_type) {
                             Ok((connector, user, repo)) => {
                                 match connector.create_remote_label(&user, &repo, &task_id, &label) {
                                     Ok(_) => {
@@ -42,22 +44,23 @@ pub(crate) fn task_label_add(
 }
 
 pub(crate) fn task_label_delete(
+    context: &TaskContext,
     task_id: String,
     name: String,
     push: bool,
     remote: &Option<String>,
     connector_type: &Option<String>,
 ) -> bool {
-    match gittask::find_task(&task_id) {
+    match context.find_task(&task_id) {
         Ok(Some(mut task)) => {
             match task.delete_label(&name) {
                 Ok(_) => {
-                    match gittask::update_task(task) {
+                    match context.update_task(task) {
                         Ok(_) => {
                             println!("Task ID {task_id} updated");
                             let mut success = false;
                             if push {
-                                match get_user_repo(remote, connector_type) {
+                                match get_user_repo(&context, remote, connector_type) {
                                     Ok((connector, user, repo)) => {
                                         match connector.delete_remote_label(&user, &repo, &task_id, &name) {
                                             Ok(_) => {

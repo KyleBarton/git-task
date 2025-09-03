@@ -8,6 +8,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use chrono::{DateTime, Local, MappedLocalTime, NaiveDate, TimeZone, Utc};
 use nu_ansi_term::{Color, Style};
 use nu_ansi_term::Color::{Black, Blue, Cyan, DarkGray, Default, Fixed, Green, LightBlue, LightCyan, LightGray, LightGreen, LightMagenta, LightPurple, LightRed, LightYellow, Magenta, Purple, Red, White, Yellow};
+use gittask::TaskContext;
 
 pub trait ExpandRange {
     fn expand_range(self) -> impl Iterator<Item = String>;
@@ -444,7 +445,7 @@ pub fn read_from_pipe() -> Option<String> {
     }
 }
 
-pub fn get_text_from_editor(text: Option<&String>) -> Option<String> {
+pub fn get_text_from_editor(context: &TaskContext, text: Option<&String>) -> Option<String> {
     let tmp_file = tempfile::Builder::new().prefix("git-task").suffix(".txt").disable_cleanup(true).tempfile().ok()?;
     let mut file = File::create(tmp_file.path()).unwrap();
 
@@ -453,7 +454,7 @@ pub fn get_text_from_editor(text: Option<&String>) -> Option<String> {
     }
 
     let editor = std::env::var("GIT_EDITOR")
-        .or_else(|_| gittask::get_config_value("core.editor"))
+        .or_else(|_| context.get_config_value("core.editor"))
         .or_else(|_| std::env::var("VISUAL"))
         .or_else(|_| std::env::var("EDITOR"))
         .or_else(|_| Ok::<String, VarError>("vi".to_string()))

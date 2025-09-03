@@ -9,7 +9,7 @@ use chrono::{Local, TimeZone};
 use nu_ansi_term::Color::DarkGray;
 use regex::Regex;
 
-use gittask::{Comment, Label, Task};
+use gittask::{Comment, Label, Task, TaskContext};
 
 use crate::connectors::{get_matching_remote_connectors, RemoteConnector, RemoteTaskState};
 use crate::property::PropertyManager;
@@ -17,6 +17,7 @@ use crate::status::StatusManager;
 use crate::util::{capitalize, colorize_string, error_message, get_text_from_editor, parse_date, parse_ids, read_from_pipe, str_to_color, success_message};
 
 pub(crate) fn task_create(
+    context: &TaskContext,
     name: String,
     description: Option<String>,
     no_desc: bool,
@@ -28,24 +29,29 @@ pub(crate) fn task_create(
         Some(description) => description,
         None => match no_desc {
             true => String::from(""),
-            false => get_text_from_editor(None).unwrap_or_else(|| String::from(""))
+            false => get_text_from_editor(&context, None).unwrap_or_else(|| String::from(""))
         }
     };
 
-    let status_manager = StatusManager::new();
-    let task = Task::new(name, description, status_manager.get_starting_status());
+    let status_manager = StatusManager::new(&context);
+    let task = Task::new(
+        name,
+        description,
+        status_manager.get_starting_status(),
+        context.get_current_user().unwrap_or(None),
+    );
 
-    match gittask::create_task(task.unwrap()) {
+    match context.create_task(task.unwrap()) {
         Ok(task) => {
             println!("Task ID {} created", task.get_id().unwrap());
             let mut success = false;
             if push {
-                match get_user_repo(remote, connector_type) {
+                match get_user_repo(&context, remote, connector_type) {
                     Ok((connector, user, repo)) => {
                         match connector.create_remote_task(&user, &repo, &task) {
                             Ok(id) => {
                                 println!("Sync: Created REMOTE task ID {id}");
-                                match gittask::update_task_id(&task.get_id().unwrap(), &id) {
+                                match context.update_task_id(&task.get_id().unwrap(), &id) {
                                     Ok(_) => {
                                         println!("Task ID {} -> {} updated", task.get_id().unwrap(), id);
                                         success = true;
@@ -66,6 +72,7 @@ pub(crate) fn task_create(
 }
 
 pub(crate) fn task_status(
+    context: &TaskContext,
     ids: String,
     status: String,
     push: bool,
@@ -73,14 +80,14 @@ pub(crate) fn task_status(
     connector_type: &Option<String>,
     no_color: bool,
 ) -> bool {
-    let status_manager = StatusManager::new();
+    let status_manager = StatusManager::new(&context);
     let status = status_manager.get_full_status_name(&status);
 
-    task_set(ids, "status".to_string(), status.clone(), push, remote, connector_type, no_color)
+    task_set(context, ids, "status".to_string(), status.clone(), push, remote, connector_type, no_color)
 }
 
-pub(crate) fn task_get(id: String, prop_name: String) -> bool {
-    match gittask::find_task(&id) {
+pub(crate) fn task_get(context: &TaskContext, id: String, prop_name: String) -> bool {
+    match context.find_task(&id) {
         Ok(Some(task)) => {
             match task.get_property(&prop_name) {
                 Some(value) => success_message(format!("{value}")),
@@ -93,6 +100,7 @@ pub(crate) fn task_get(id: String, prop_name: String) -> bool {
 }
 
 pub(crate) fn task_set(
+    context: &TaskContext,
     ids: String,
     prop_name: String,
     value: String,
@@ -105,12 +113,12 @@ pub(crate) fn task_set(
     match prop_name.as_str() {
         "id" => {
             for id in &ids {
-                match gittask::update_task_id(&id, &value) {
+                match context.update_task_id(&id, &value) {
                     Ok(_) => {
                         println!("Task ID {id} -> {value} updated");
 
                         if push {
-                            task_push(value.clone(), remote, connector_type, false, false, no_color);
+                            task_push(&context, value.clone(), remote, connector_type, false, false, no_color);
                         }
                     },
                     Err(e) => {
@@ -121,16 +129,16 @@ pub(crate) fn task_set(
         },
         _ => {
             for id in &ids {
-                match gittask::find_task(&id) {
+                match context.find_task(&id) {
                     Ok(Some(mut task)) => {
                         task.set_property(&prop_name, &value);
 
-                        match gittask::update_task(task) {
+                        match context.update_task(task) {
                             Ok(_) => {
                                 println!("Task ID {id} updated");
 
                                 if push {
-                                    task_push(id.to_string(), remote, connector_type, false, false, no_color);
+                                    task_push(&context, id.to_string(), remote, connector_type, false, false, no_color);
                                 }
                             },
                             Err(e) => {
@@ -153,6 +161,7 @@ pub(crate) fn task_set(
 }
 
 pub(crate) fn task_replace(
+    context: &TaskContext,
     ids: String,
     prop_name: String,
     search: String,
@@ -169,7 +178,7 @@ pub(crate) fn task_replace(
         false => None
     };
     for id in ids {
-        match gittask::find_task(&id) {
+        match context.find_task(&id) {
             Ok(Some(mut task)) => {
                 if let Some(value) = task.get_property(&prop_name) {
                     let new_value = match regex {
@@ -177,11 +186,11 @@ pub(crate) fn task_replace(
                         None => value.replace(&search, &replace)
                     };
                     task.set_property(&prop_name, &new_value);
-                    match gittask::update_task(task) {
+                    match context.update_task(task) {
                         Ok(_) => {
                             println!("Task ID {id} updated");
                             if push {
-                                task_push(id.to_string(), remote, connector_type, false, false, no_color);
+                                task_push(&context, id.to_string(), remote, connector_type, false, false, no_color);
                             }
                         },
                         Err(e) => eprintln!("ERROR: {e}")
@@ -197,13 +206,13 @@ pub(crate) fn task_replace(
     true
 }
 
-pub(crate) fn task_unset(ids: String, prop_name: String) -> bool {
+pub(crate) fn task_unset(context: &TaskContext, ids: String, prop_name: String) -> bool {
     let ids = parse_ids(ids);
     for id in ids {
-        match gittask::find_task(&id) {
+        match context.find_task(&id) {
             Ok(Some(mut task)) => {
                 if task.delete_property(&prop_name) {
-                    match gittask::update_task(task) {
+                    match context.update_task(task) {
                         Ok(_) => println!("Task ID {id} updated"),
                         Err(e) => eprintln!("ERROR: {e}")
                     }
@@ -219,18 +228,18 @@ pub(crate) fn task_unset(ids: String, prop_name: String) -> bool {
     true
 }
 
-pub(crate) fn task_edit(id: String, prop_name: String) -> bool {
-    match gittask::find_task(&id) {
+pub(crate) fn task_edit(context: &TaskContext, id: String, prop_name: String) -> bool {
+    match context.find_task(&id) {
         Ok(Some(mut task)) => {
             match prop_name.as_str() {
                 "id" => {
-                    match get_text_from_editor(Some(&task.get_id().unwrap())) {
+                    match get_text_from_editor(&context, Some(&task.get_id().unwrap())) {
                         Some(text) => {
                             task.set_id(text.clone());
-                            match gittask::update_task(task) {
+                            match context.update_task(task) {
                                 Ok(_) => {
                                     println!("Task ID {id} -> {text} updated");
-                                    if let Err(e) = gittask::delete_tasks(&[&id]) {
+                                    if let Err(e) = context.delete_tasks(&[&id]) {
                                         eprintln!("ERROR: {e}");
                                     }
                                     true
@@ -244,10 +253,10 @@ pub(crate) fn task_edit(id: String, prop_name: String) -> bool {
                 _ => {
                     match task.get_property(&prop_name) {
                         Some(value) => {
-                            match get_text_from_editor(Some(value)) {
+                            match get_text_from_editor(&context, Some(value)) {
                                 Some(text) => {
                                     task.set_property(&prop_name, &text);
-                                    match gittask::update_task(task) {
+                                    match context.update_task(task) {
                                         Ok(_) => success_message(format!("Task ID {id} updated")),
                                         Err(e) => error_message(format!("ERROR: {e}")),
                                     }
@@ -265,7 +274,7 @@ pub(crate) fn task_edit(id: String, prop_name: String) -> bool {
     }
 }
 
-pub(crate) fn task_import(ids: Option<String>, format: Option<String>) -> bool {
+pub(crate) fn task_import(context: &TaskContext, ids: Option<String>, format: Option<String>) -> bool {
     if let Some(format) = format {
         if format.to_lowercase() != "json" {
             return error_message("Only JSON format is supported".to_string());
@@ -273,13 +282,13 @@ pub(crate) fn task_import(ids: Option<String>, format: Option<String>) -> bool {
     }
 
     if let Some(input) = read_from_pipe() {
-        import_from_input(ids, &input)
+        import_from_input(context, ids, &input)
     } else {
         error_message("Can't read from pipe".to_string())
     }
 }
 
-fn import_from_input(ids: Option<String>, input: &String) -> bool {
+fn import_from_input(context: &TaskContext, ids: Option<String>, input: &String) -> bool {
     if let Ok(tasks) = serde_json::from_str::<Vec<Task>>(input) {
         let ids = ids.map(parse_ids);
 
@@ -292,7 +301,7 @@ fn import_from_input(ids: Option<String>, input: &String) -> bool {
                 }
             }
 
-            match gittask::create_task(task) {
+            match context.create_task(task) {
                 Ok(_) => println!("Task ID {id} imported"),
                 Err(e) => eprintln!("ERROR: {e}"),
             }
@@ -304,6 +313,7 @@ fn import_from_input(ids: Option<String>, input: &String) -> bool {
 }
 
 pub(crate) fn task_pull(
+    context: &TaskContext,
     ids: Option<String>,
     limit: Option<usize>,
     status: Option<String>,
@@ -312,13 +322,13 @@ pub(crate) fn task_pull(
     no_comments: bool,
     no_labels: bool,
 ) -> bool {
-    match get_user_repo(remote, connector_type) {
+    match get_user_repo(&context, remote, connector_type) {
         Ok((connector, user, repo)) => {
             println!("Pulling tasks from {user}/{repo}...");
 
             let ids = ids.map(parse_ids);
 
-            let status_manager = StatusManager::new();
+            let status_manager = StatusManager::new(&context);
             let mut task_statuses = vec![
                 status_manager.get_starting_status(),
                 status_manager.get_final_status(),
@@ -331,7 +341,7 @@ pub(crate) fn task_pull(
                 for id in ids.unwrap() {
                     match connector.get_remote_task(&user, &repo, &id, !no_comments, !no_labels, &task_statuses) {
                         Ok(task) => {
-                            match import_remote_task(task, no_comments) {
+                            match import_remote_task(&context, task, no_comments) {
                                 Ok(Some(id)) => println!("Task ID {id} updated"),
                                 Ok(None) => println!("Task ID {id} skipped, nothing to update"),
                                 Err(e) => eprintln!("ERROR: {e}"),
@@ -359,7 +369,7 @@ pub(crate) fn task_pull(
                         } else {
                             for task in tasks {
                                 let task_id = task.get_id().unwrap();
-                                match import_remote_task(task, no_comments) {
+                                match import_remote_task(&context, task, no_comments) {
                                     Ok(Some(id)) => println!("Task ID {id} updated"),
                                     Ok(None) => println!("Task ID {task_id} skipped, nothing to update"),
                                     Err(e) => eprintln!("ERROR: {e}"),
@@ -376,8 +386,8 @@ pub(crate) fn task_pull(
     }
 }
 
-fn import_remote_task(remote_task: Task, no_comments: bool) -> Result<Option<String>, String> {
-    match gittask::find_task(&remote_task.get_id().unwrap()) {
+fn import_remote_task(context: &TaskContext, remote_task: Task, no_comments: bool) -> Result<Option<String>, String> {
+    match context.find_task(&remote_task.get_id().unwrap()) {
         Ok(Some(mut local_task)) => {
             if local_task.get_property("name") == remote_task.get_property("name")
                 && local_task.get_property("description") == remote_task.get_property("description")
@@ -394,13 +404,13 @@ fn import_remote_task(remote_task: Task, no_comments: bool) -> Result<Option<Str
                     }
                 }
 
-                match gittask::update_task(local_task) {
+                match context.update_task(local_task) {
                     Ok(id) => Ok(Some(id)),
                     Err(e) => Err(e),
                 }
             }
         },
-        Ok(None) => match gittask::create_task(remote_task) {
+        Ok(None) => match context.create_task(remote_task) {
             Ok(local_task) => Ok(Some(local_task.get_id().unwrap())),
             Err(e) => Err(e),
         },
@@ -415,12 +425,13 @@ fn comments_are_equal(local_comments: &Option<Vec<Comment>>, remote_comments: &O
     )
 }
 
-fn get_user_repo(remote: &Option<String>,
+fn get_user_repo(context: &TaskContext,
+                 remote: &Option<String>,
                  connector_type: &Option<String>
-) -> Result<(Box<&'static dyn RemoteConnector>, String, String), String> {
-    match gittask::list_remotes(remote) {
+) -> Result<(Box<dyn RemoteConnector>, String, String), String> {
+    match context.list_remotes(remote) {
         Ok(remotes) => {
-            let user_repo = get_matching_remote_connectors(remotes, connector_type);
+            let mut user_repo = get_matching_remote_connectors(&context, remotes, connector_type);
             if user_repo.is_empty() {
                 return Err("No passing remotes".to_string());
             }
@@ -429,25 +440,25 @@ fn get_user_repo(remote: &Option<String>,
                 return Err("More than one passing remote found. Please specify with --remote and/or --connector option.".to_owned());
             }
 
-            Ok(user_repo.first().unwrap().clone())
+            Ok(user_repo.remove(0))
         },
         Err(e) => Err(e)
     }
 }
 
-pub(crate) fn task_export(ids: Option<String>, status: Option<Vec<String>>, limit: Option<usize>, format: Option<String>, pretty: bool) -> bool {
+pub(crate) fn task_export(context: &TaskContext, ids: Option<String>, status: Option<Vec<String>>, limit: Option<usize>, format: Option<String>, pretty: bool) -> bool {
     if let Some(format) = format {
         if format.to_lowercase() != "json" {
             return error_message("Only JSON format is supported".to_string());
         }
     }
 
-    match gittask::list_tasks() {
+    match context.list_tasks() {
         Ok(mut tasks) => {
             let mut result = vec![];
             tasks.sort_by_key(|task| task.get_id().unwrap().parse::<u64>().unwrap_or(0));
 
-            let status_manager = StatusManager::new();
+            let status_manager = StatusManager::new(&context);
             let statuses = match status {
                 Some(statuses) => Some(statuses.iter().map(|s| status_manager.get_full_status_name(s)).collect::<Vec<_>>()),
                 None => None
@@ -493,6 +504,7 @@ pub(crate) fn task_export(ids: Option<String>, status: Option<Vec<String>>, limi
 }
 
 pub(crate) fn task_push(
+    context: &TaskContext,
     ids: String,
     remote: &Option<String>,
     connector_type: &Option<String>,
@@ -502,9 +514,9 @@ pub(crate) fn task_push(
 ) -> bool {
     let ids = parse_ids(ids);
 
-    match get_user_repo(remote, connector_type) {
+    match get_user_repo(&context, remote, connector_type) {
         Ok((connector, user, repo)) => {
-            let status_manager = StatusManager::new();
+            let status_manager = StatusManager::new(&context);
             let mut task_statuses = vec![
                 status_manager.get_starting_status(),
                 status_manager.get_final_status(),
@@ -513,10 +525,10 @@ pub(crate) fn task_push(
                 task_statuses.insert(1, status_in_progress);
             }
 
-            let no_color = check_no_color(no_color);
+            let no_color = check_no_color(&context, no_color);
             for id in ids {
                 println!("Sync: task ID {id}");
-                if let Ok(Some(local_task)) = gittask::find_task(&id) {
+                if let Ok(Some(local_task)) = context.find_task(&id) {
                     println!("Sync: LOCAL task ID {id} found");
                     let remote_task = connector.get_remote_task(&user, &repo, &id, !no_comments, !no_labels, &task_statuses);
                     if let Ok(remote_task) = remote_task {
@@ -559,7 +571,7 @@ pub(crate) fn task_push(
                                 for comment in local_task.get_comments().as_ref().unwrap_or(&vec![]) {
                                     let local_comment_id = comment.get_id().unwrap();
                                     if !remote_comment_ids.contains(&local_comment_id) {
-                                        create_remote_comment(&connector, &user, &repo, &id, &comment);
+                                        create_remote_comment(context, &connector, &user, &repo, &id, &comment);
                                         comments_updated = true;
                                     }
                                 }
@@ -586,7 +598,7 @@ pub(crate) fn task_push(
                             Ok(id) => {
                                 println!("Sync: Created REMOTE task ID {id}");
                                 if local_task.get_id().unwrap() != id {
-                                    match gittask::update_task_id(&local_task.get_id().unwrap(), &id) {
+                                    match context.update_task_id(&local_task.get_id().unwrap(), &id) {
                                         Ok(_) => println!("Task ID {} -> {} updated", local_task.get_id().unwrap(), id),
                                         Err(e) => eprintln!("ERROR: {e}"),
                                     }
@@ -596,7 +608,7 @@ pub(crate) fn task_push(
                                     if let Some(comments) = local_task.get_comments() {
                                         if !comments.is_empty() {
                                             for comment in comments {
-                                                create_remote_comment(&connector, &user, &repo, &id, &comment);
+                                                create_remote_comment(context, &connector, &user, &repo, &id, &comment);
                                             }
                                         }
                                     }
@@ -615,12 +627,12 @@ pub(crate) fn task_push(
     }
 }
 
-fn create_remote_comment(connector: &Box<&'static dyn RemoteConnector>, user: &String, repo: &String, id: &String, comment: &Comment) {
+fn create_remote_comment(context: &TaskContext, connector: &Box<dyn RemoteConnector>, user: &String, repo: &String, id: &String, comment: &Comment) {
     let local_comment_id = comment.get_id().unwrap();
     match connector.create_remote_comment(user, repo, id, comment) {
         Ok(remote_comment_id) => {
             println!("Created REMOTE comment ID {}", remote_comment_id);
-            match gittask::update_comment_id(&id, &local_comment_id, &remote_comment_id) {
+            match context.update_comment_id(&id, &local_comment_id, &remote_comment_id) {
                 Ok(_) => println!("Comment ID {} -> {} updated", local_comment_id, remote_comment_id),
                 Err(e) => eprintln!("ERROR: {e}"),
             }
@@ -630,6 +642,7 @@ fn create_remote_comment(connector: &Box<&'static dyn RemoteConnector>, user: &S
 }
 
 pub(crate) fn task_delete(
+    context: &TaskContext,
     ids: Option<String>,
     status: Option<Vec<String>>,
     push: bool,
@@ -638,9 +651,9 @@ pub(crate) fn task_delete(
 ) -> bool {
     let ids = match status {
         Some(statuses) => {
-            match gittask::list_tasks() {
+            match context.list_tasks() {
                 Ok(tasks) => {
-                    let status_manager = StatusManager::new();
+                    let status_manager = StatusManager::new(&context);
                     let statuses = statuses.iter().map(|s| status_manager.get_full_status_name(s)).collect::<Vec<_>>();
                     let ids = tasks.iter().filter(|task| statuses.contains(task.get_property("status").unwrap())).map(|task| task.get_id().unwrap()).collect::<Vec<_>>();
                     Ok(ids)
@@ -661,12 +674,12 @@ pub(crate) fn task_delete(
     let ids = ids.unwrap();
     let ids = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>();
 
-    match gittask::delete_tasks(&ids) {
+    match context.delete_tasks(&ids) {
         Ok(_) => {
             println!("Task(s) {} deleted", ids.join(", "));
             let mut success = false;
             if push {
-                match get_user_repo(remote, connector_type) {
+                match get_user_repo(&context, remote, connector_type) {
                     Ok((connector, user, repo)) => {
                         for id in ids {
                             match connector.delete_remote_task(&user, &repo, &id.to_string()) {
@@ -686,18 +699,18 @@ pub(crate) fn task_delete(
     }
 }
 
-pub(crate) fn task_clear() -> bool {
-    match gittask::clear_tasks() {
+pub(crate) fn task_clear(context: &TaskContext, ) -> bool {
+    match context.clear_tasks() {
         Ok(task_count) => success_message(format!("{task_count} task(s) deleted")),
         Err(e) => error_message(format!("ERROR: {e}")),
     }
 }
 
-pub(crate) fn task_show(id: String, no_color: bool) -> bool {
-    match gittask::find_task(&id) {
+pub(crate) fn task_show(context: &TaskContext, id: String, no_color: bool) -> bool {
+    match context.find_task(&id) {
         Ok(Some(task)) => {
-            let no_color = check_no_color(no_color);
-            print_task(task, no_color);
+            let no_color = check_no_color(&context, no_color);
+            print_task(&context, task, no_color);
             true
         },
         Ok(None) => error_message(format!("Task ID {id} not found")),
@@ -705,10 +718,10 @@ pub(crate) fn task_show(id: String, no_color: bool) -> bool {
     }
 }
 
-fn print_task(task: Task, no_color: bool) {
-    let prop_manager = PropertyManager::new();
+fn print_task(context: &TaskContext, task: Task, no_color: bool) {
+    let prop_manager = PropertyManager::new(&context);
     let properties = prop_manager.get_properties();
-    let context = extract_task_context(&task);
+    let task_properties = extract_task_properties(&task);
 
     let id_title = colorize_string("ID", DarkGray, no_color);
     println!("{}: {}", id_title, task.get_id().unwrap_or("---".to_owned()));
@@ -718,17 +731,17 @@ fn print_task(task: Task, no_color: bool) {
     let created = task.get_property("created").unwrap_or(&empty_string);
     if !created.is_empty() {
         let created_title = colorize_string("Created", DarkGray, no_color);
-        println!("{}: {}", created_title, prop_manager.format_value("created", created, &context, properties, true));
+        println!("{}: {}", created_title, prop_manager.format_value("created", created, &task_properties, properties, true));
     }
 
     let author = task.get_property("author").unwrap_or(&empty_string);
     if !author.is_empty() {
         let author_title = colorize_string("Author", DarkGray, no_color);
-        println!("{}: {}", author_title, prop_manager.format_value("author", author, &context, properties, no_color));
+        println!("{}: {}", author_title, prop_manager.format_value("author", author, &task_properties, properties, no_color));
     }
 
     let name_title = colorize_string("Name", DarkGray, no_color);
-    println!("{}: {}", name_title, prop_manager.format_value("name", task.get_property("name").unwrap(), &context, properties, no_color));
+    println!("{}: {}", name_title, prop_manager.format_value("name", task.get_property("name").unwrap(), &task_properties, properties, no_color));
 
     if let Some(labels) = task.get_labels() {
         if !labels.is_empty() {
@@ -743,7 +756,7 @@ fn print_task(task: Task, no_color: bool) {
         }
     }
 
-    let status_manager = StatusManager::new();
+    let status_manager = StatusManager::new(&context);
     let status_title = colorize_string("Status", DarkGray, no_color);
     println!("{}: {}", status_title, status_manager.format_status(task.get_property("status").unwrap(), no_color));
 
@@ -751,13 +764,13 @@ fn print_task(task: Task, no_color: bool) {
         entry.0 != "name" && entry.0 != "status" && entry.0 != "description" && entry.0 != "created" && entry.0 != "author"
     }).for_each(|entry| {
         let title = colorize_string(&capitalize(entry.0), DarkGray, no_color);
-        println!("{}: {}", title, prop_manager.format_value(entry.0, entry.1, &context, properties, no_color));
+        println!("{}: {}", title, prop_manager.format_value(entry.0, entry.1, &task_properties, properties, no_color));
     });
 
     let description = task.get_property("description").unwrap_or(&empty_string);
     if !description.is_empty() {
         let description_title = colorize_string("Description", DarkGray, no_color);
-        println!("{}: {}", description_title, prop_manager.format_value("description", description, &context, properties, no_color));
+        println!("{}: {}", description_title, prop_manager.format_value("description", description, &task_properties, properties, no_color));
     }
 
     if let Some(comments) = task.get_comments() {
@@ -849,7 +862,8 @@ fn make_comparison(first: &Task, second: &Task, prop: &str, value_type: &str) ->
     }
 }
 
-pub(crate) fn task_list(status: Option<Vec<String>>,
+pub(crate) fn task_list(context: &TaskContext,
+            status: Option<Vec<String>>,
              keyword: Option<String>,
              from: Option<String>,
              until: Option<String>,
@@ -858,12 +872,12 @@ pub(crate) fn task_list(status: Option<Vec<String>>,
              sort: Option<Vec<String>>,
              limit: Option<usize>,
              no_color: bool) -> bool {
-    match gittask::list_tasks() {
+    match context.list_tasks() {
         Ok(mut tasks) => {
-            let prop_manager = PropertyManager::new();
+            let prop_manager = PropertyManager::new(&context);
             let sort = match sort {
                 Some(sort) => Some(sort),
-                None => match gittask::get_config_value("task.list.sort") {
+                None => match context.get_config_value("task.list.sort") {
                     Ok(sort) => {
                         Some(sort.split(",").map(|s| s.trim().to_string()).collect())
                     },
@@ -903,16 +917,16 @@ pub(crate) fn task_list(status: Option<Vec<String>>,
             let from = parse_date(from);
             let until = parse_date(until);
 
-            let status_manager = StatusManager::new();
+            let status_manager = StatusManager::new(&context);
             let statuses = match status {
                 Some(statuses) => Some(statuses.iter().map(|s| status_manager.get_full_status_name(s)).collect::<Vec<_>>()),
                 None => None
             };
-            let no_color = check_no_color(no_color);
+            let no_color = check_no_color(&context, no_color);
 
             let columns = match columns {
                 Some(columns) => Some(columns),
-                None => match gittask::get_config_value("task.list.columns") {
+                None => match context.get_config_value("task.list.columns") {
                     Ok(list_columns) => {
                         Some(list_columns.split(",").map(|s| s.trim().to_string()).collect())
                     },
@@ -994,10 +1008,10 @@ fn print_task_line(task: Task, columns: &Option<Vec<String>>, no_color: bool, pr
             String::from("labels"),
         ]
     };
-    let context = extract_task_context(&task);
+    let properties = extract_task_properties(&task);
 
     columns.iter().for_each(|column| {
-        print_column(&task, column, &context, no_color, prop_manager, status_manager);
+        print_column(&task, column, &properties, no_color, prop_manager, status_manager);
     });
     println!();
 }
@@ -1033,13 +1047,13 @@ fn print_column(
     }
 }
 
-pub(crate) fn task_stats(no_color: bool) -> bool {
-    match gittask::list_tasks() {
+pub(crate) fn task_stats(context: &TaskContext, no_color: bool) -> bool {
+    match context.list_tasks() {
         Ok(tasks) => {
             let mut total = 0;
             let mut status_stats = HashMap::<String, i32>::new();
             let mut author_stats = HashMap::<String, i32>::new();
-            let no_color = check_no_color(no_color);
+            let no_color = check_no_color(&context, no_color);
 
             for task in tasks {
                 total += 1;
@@ -1056,7 +1070,7 @@ pub(crate) fn task_stats(no_color: bool) -> bool {
             println!("Total tasks: {total}");
             println!();
 
-            let status_manager = StatusManager::new();
+            let status_manager = StatusManager::new(&context);
             for status in status_manager.get_statuses() {
                 if let Some(count) = status_stats.get(status.get_name()) {
                     println!("{}: {}", status_manager.format_status(status.get_name(), no_color), count);
@@ -1067,7 +1081,7 @@ pub(crate) fn task_stats(no_color: bool) -> bool {
                 println!();
                 println!("Top 10 authors:");
 
-                let prop_manager = PropertyManager::new();
+                let prop_manager = PropertyManager::new(&context);
                 let empty_context = HashMap::new();
 
                 let mut author_stats = author_stats.iter().collect::<Vec<_>>();
@@ -1083,13 +1097,13 @@ pub(crate) fn task_stats(no_color: bool) -> bool {
     }
 }
 
-fn check_no_color(no_color: bool) -> bool {
+fn check_no_color(context: &TaskContext, no_color: bool) -> bool {
     no_color
-        || gittask::get_config_value("color.ui").unwrap_or_else(|_| "true".to_string()) == "false"
+        || context.get_config_value("color.ui").unwrap_or_else(|_| "true".to_string()) == "false"
         || std::env::var("NO_COLOR").unwrap_or_else(|_| "0".to_string()) == "1"
 }
 
-fn extract_task_context(task: &Task) -> HashMap<String, String> {
+fn extract_task_properties(task: &Task) -> HashMap<String, String> {
     let mut context = task.get_all_properties().to_owned();
     context.insert("id".to_string(), task.get_id().unwrap());
     context

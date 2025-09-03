@@ -8,12 +8,20 @@ use jira_v3_openapi::models::IssueTransition;
 use regex::Regex;
 use tokio::runtime::Runtime;
 
-use gittask::{Task, Comment, Label};
+use gittask::{Task, Comment, Label, TaskContext};
 
 use crate::connectors::{RemoteConnector, RemoteTaskState};
 use crate::util::error_message;
 
-pub struct JiraRemoteConnector;
+pub struct JiraRemoteConnector {
+    context: TaskContext,
+}
+
+impl JiraRemoteConnector {
+    pub fn new(context: &TaskContext) -> Self {
+        Self { context: context.clone() }
+    }
+}
 
 static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     Runtime::new().unwrap()
@@ -32,7 +40,7 @@ impl RemoteConnector for JiraRemoteConnector {
     }
 
     fn supports_remote(&self, _url: &str) -> Option<(String, String)> {
-        if let Some(url) = get_base_url() {
+        if let Some(url) = get_base_url(&self.context) {
             match Regex::new(r"https://([^/]+)\.atlassian\.net/jira/software/projects/([^/]+)").unwrap().captures(&url) {
                 Some(caps) if caps.len() >= 3 => {
                     let domain = caps.get(1)?.as_str().to_string();
@@ -56,7 +64,7 @@ impl RemoteConnector for JiraRemoteConnector {
         state: RemoteTaskState,
         task_statuses: &Vec<String>
     ) -> Result<Vec<Task>, String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         let done_status = "Done".to_string();
         let last_status = task_statuses.last().unwrap_or_else(|| &done_status);
@@ -137,7 +145,7 @@ impl RemoteConnector for JiraRemoteConnector {
         with_labels: bool,
         _task_statuses: &Vec<String>
     ) -> Result<Task, String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         let mut field_list = vec!["summary".to_string(), "description".to_string(), "status".to_string(), "created".to_string(), "creator".to_string()];
         if with_comments {
@@ -201,7 +209,7 @@ impl RemoteConnector for JiraRemoteConnector {
         project: &String,
         task: &Task
     ) -> Result<String, String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             let mut issue_details = jira_v3_openapi::models::IssueUpdateDetails {
@@ -250,7 +258,7 @@ impl RemoteConnector for JiraRemoteConnector {
         task_id: &String,
         comment: &Comment
     ) -> Result<String, String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             let comment_body = jira_v3_openapi::models::Comment {
@@ -283,7 +291,7 @@ impl RemoteConnector for JiraRemoteConnector {
         task_id: &String,
         label: &Label,
     ) -> Result<(), String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             let issue_result = issues_api::get_issue(
@@ -350,7 +358,7 @@ impl RemoteConnector for JiraRemoteConnector {
         labels: Option<&Vec<Label>>,
         state: RemoteTaskState
     ) -> Result<(), String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             let mut fields = HashMap::new();
@@ -438,7 +446,7 @@ impl RemoteConnector for JiraRemoteConnector {
         comment_id: &String,
         text: &String
     ) -> Result<(), String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             let comment = jira_v3_openapi::models::Comment {
@@ -467,7 +475,7 @@ impl RemoteConnector for JiraRemoteConnector {
         project: &String,
         task_id: &String
     ) -> Result<(), String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             match issues_api::delete_issue(
@@ -488,7 +496,7 @@ impl RemoteConnector for JiraRemoteConnector {
         task_id: &String,
         comment_id: &String
     ) -> Result<(), String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             match issue_comments_api::delete_comment(
@@ -509,7 +517,7 @@ impl RemoteConnector for JiraRemoteConnector {
         task_id: &String,
         name: &String,
     ) -> Result<(), String> {
-        let config = get_configuration(domain)?;
+        let config = get_configuration(&self.context, domain)?;
 
         RUNTIME.block_on(async {
             let issue_result = issues_api::get_issue(
@@ -573,8 +581,8 @@ fn get_token_from_env() -> Result<String, String> {
         .map_err(|_| "No JIRA_TOKEN nor JIRA_API_TOKEN env variable set".to_string())
 }
 
-fn get_jira_user() -> Result<String, String> {
-    match gittask::get_config_value("task.jira.user") {
+fn get_jira_user(context: &TaskContext) -> Result<String, String> {
+    match context.get_config_value("task.jira.user") {
         Ok(email) => Ok(email),
         _ => match std::env::var("JIRA_USER") {
             Ok(user) => Ok(user),
@@ -583,8 +591,8 @@ fn get_jira_user() -> Result<String, String> {
     }
 }
 
-fn get_base_url() -> Option<String> {
-    let mut result = match gittask::get_config_value("task.jira.url") {
+fn get_base_url(context: &TaskContext) -> Option<String> {
+    let mut result = match context.get_config_value("task.jira.url") {
         Ok(url) => url,
         _ => match std::env::var("JIRA_URL").or_else(|_| std::env::var("JIRA_BASE_URL")) {
             Ok(url) => url,
@@ -599,8 +607,8 @@ fn get_base_url() -> Option<String> {
     Some(result)
 }
 
-fn get_configuration(domain: &String) -> Result<Configuration, String> {
-    let email = get_jira_user()?;
+fn get_configuration(context: &TaskContext, domain: &String) -> Result<Configuration, String> {
+    let email = get_jira_user(&context)?;
     let token = get_token_from_env()?;
 
     let mut config = Configuration::new();

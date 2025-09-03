@@ -3,7 +3,7 @@ mod gitlab;
 mod jira;
 mod redmine;
 
-use gittask::{Comment, Label, Task};
+use gittask::{Comment, Label, Task, TaskContext};
 use crate::connectors::github::GithubRemoteConnector;
 use crate::connectors::gitlab::GitlabRemoteConnector;
 use crate::connectors::jira::JiraRemoteConnector;
@@ -34,20 +34,23 @@ pub trait RemoteConnector {
     fn delete_remote_label(&self, user: &String, repo: &String, task_id: &String, name: &String) -> Result<(), String>;
 }
 
-const CONNECTORS: [&dyn RemoteConnector; 4] = [
-    &GithubRemoteConnector,
-    &GitlabRemoteConnector,
-    &JiraRemoteConnector,
-    &RedmineRemoteConnector,
-];
+fn connectors(context: &TaskContext) -> [Box<dyn RemoteConnector>; 4] {
+    [
+        Box::new(GithubRemoteConnector),
+        Box::new(GitlabRemoteConnector::new(&context)),
+        Box::new(JiraRemoteConnector::new(&context)),
+        Box::new(RedmineRemoteConnector::new(&context)),
+    ]
+}
 
-pub fn get_matching_remote_connectors(remotes: Vec<String>,
+pub fn get_matching_remote_connectors(context: &TaskContext,
+                                      remotes: Vec<String>,
                                       connector_type: &Option<String>
-) -> Vec<(Box<&'static dyn RemoteConnector>, String, String)> {
+) -> Vec<(Box<dyn RemoteConnector>, String, String)> {
     let mut result = vec![];
 
     for remote in remotes {
-        for connector in CONNECTORS {
+        for connector in connectors(&context) {
             if let Some(connector_type) = connector_type {
                 if connector_type != connector.type_name() {
                     continue;
@@ -55,7 +58,7 @@ pub fn get_matching_remote_connectors(remotes: Vec<String>,
             }
 
             if let Some((user, repo)) = connector.supports_remote(&remote) {
-                result.push((Box::new(connector), user, repo));
+                result.push((connector, user, repo));
             }
         }
     }
@@ -63,8 +66,8 @@ pub fn get_matching_remote_connectors(remotes: Vec<String>,
     result
 }
 
-pub(crate) fn get_config_options_from_connectors() -> Vec<String> {
-    CONNECTORS
+pub(crate) fn get_config_options_from_connectors(context: &TaskContext) -> Vec<String> {
+    connectors(&context)
         .iter()
         .filter_map(|c| c.get_config_options())
         .flatten()

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use evalexpr::{ContextWithMutableVariables, HashMapContext};
 use nu_ansi_term::AnsiString;
 use serde::{Deserialize, Serialize};
-
+use gittask::TaskContext;
 use crate::util::{format_datetime, str_to_color};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -143,15 +143,17 @@ impl PropertyCondFormat {
 }
 
 pub struct PropertyManager {
+    context: TaskContext,
     properties: Vec<Property>,
 }
 
 impl PropertyManager {
-    pub fn new() -> PropertyManager {
-        let properties = Self::read_config().unwrap_or_else(|_| Self::get_defaults());
+    pub fn new(context: &TaskContext) -> PropertyManager {
+        let properties = Self::read_config(&context).unwrap_or_else(|_| Self::get_defaults());
 
         PropertyManager {
-            properties
+            properties,
+            context: context.clone(),
         }
     }
 
@@ -211,21 +213,21 @@ impl PropertyManager {
 
     pub fn set_properties(&mut self, properties: Vec<Property>) -> Result<(), String> {
         self.properties = properties;
-        Self::save_config(&self.properties)
+        self.save_config()
     }
 
-    fn read_config() -> Result<Vec<Property>, String> {
-        match gittask::get_config_value("task.properties") {
+    fn read_config(context: &TaskContext, ) -> Result<Vec<Property>, String> {
+        match context.get_config_value("task.properties") {
             Ok(s) => Self::parse_properties(s),
             Err(e) => Err(e)
         }
     }
 
-    fn save_config(properties: &Vec<Property>) -> Result<(), String> {
-        let properties = serde_json::to_string(&properties).map_err(|_| "Could not serialize properties".to_string())?;
-        match gittask::set_config_value("task.properties", &properties) {
+    fn save_config(&self) -> Result<(), String> {
+        let properties = serde_json::to_string(&self.properties).map_err(|_| "Could not serialize properties".to_string())?;
+        match &self.context.set_config_value("task.properties", &properties) {
             Ok(_) => Ok(()),
-            Err(e) => Err(e)
+            Err(e) => Err(e.to_string())
         }
     }
 
@@ -350,7 +352,7 @@ impl PropertyManager {
                 };
                 match set_result {
                     Ok(_) => {
-                        match Self::save_config(&self.properties) {
+                        match self.save_config() {
                             Ok(_) => Ok(()),
                             Err(e) => Err(e)
                         }
@@ -376,7 +378,7 @@ impl PropertyManager {
             cond_format: cond_format.map_or_else(|| None, |cond_format| Some(PropertyCondFormat::from(cond_format))),
         };
         self.properties.push(property);
-        Self::save_config(&self.properties)
+        self.save_config()
     }
 
     pub fn delete_property(&mut self, name: &String) -> Result<(), String> {
@@ -384,7 +386,7 @@ impl PropertyManager {
         self.properties.retain(|s| s.name != *name);
         match prev_prop_count == self.properties.len() {
             true => Err("Property not found".to_string()),
-            false => Self::save_config(&self.properties),
+            false => self.save_config(),
         }
     }
 
@@ -399,7 +401,7 @@ impl PropertyManager {
                     style: enum_value_style,
                 });
                 property.enum_values = Some(enum_values);
-                Self::save_config(&self.properties)
+                self.save_config()
             },
             None => Err("Property not found".to_string())
         }
@@ -441,7 +443,7 @@ impl PropertyManager {
                         enum_value.color = enum_value_color;
                         enum_value.style = enum_value_style;
                         property.enum_values = Some(enum_values);
-                        Self::save_config(&self.properties)
+                        self.save_config()
                     },
                     None => Err("Enum value not found. To add a new value use `git task config props enum add` command".to_string())
                 }
@@ -461,7 +463,7 @@ impl PropertyManager {
                     true => Err("Enum value not found".to_string()),
                     false => {
                         property.enum_values = Some(enum_values);
-                        Self::save_config(&self.properties)
+                        self.save_config()
                     },
                 }
             },
@@ -480,7 +482,7 @@ impl PropertyManager {
                     style: cond_format_style,
                 });
                 property.cond_format = Some(cond_format);
-                Self::save_config(&self.properties)
+                self.save_config()
             },
             None => Err("Property not found".to_string())
         }
@@ -491,7 +493,7 @@ impl PropertyManager {
         match property {
             Some(property) => {
                 property.cond_format = None;
-                Self::save_config(&self.properties)
+                self.save_config()
             },
             None => Err("Property not found".to_string())
         }

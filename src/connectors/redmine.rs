@@ -3,11 +3,19 @@ use std::collections::HashMap;
 use redmine_api::api::issues::{Issue, ListIssues};
 use redmine_api::api::Redmine;
 
-use gittask::{Task, Comment, Label};
+use gittask::{Task, Comment, Label, TaskContext};
 
 use crate::connectors::{RemoteConnector, RemoteTaskState};
 
-pub struct RedmineRemoteConnector;
+pub struct RedmineRemoteConnector {
+    context: TaskContext,
+}
+
+impl RedmineRemoteConnector {
+    pub fn new(context: &TaskContext) -> Self {
+        Self { context: context.clone() }
+    }
+}
 
 impl RemoteConnector for RedmineRemoteConnector {
     fn type_name(&self) -> &str {
@@ -36,7 +44,7 @@ impl RemoteConnector for RedmineRemoteConnector {
         _state: RemoteTaskState,
         task_statuses: &Vec<String>
     ) -> Result<Vec<Task>, String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
         let endpoint = ListIssues::builder().build().map_err(|e| e.to_string())?;
         let issues = redmine.json_response_body_all_pages::<_, Issue>(&endpoint).map_err(|e| e.to_string())?;
         let mut tasks = Vec::new();
@@ -57,28 +65,28 @@ impl RemoteConnector for RedmineRemoteConnector {
         with_labels: bool,
         task_statuses: &Vec<String>
     ) -> Result<Task, String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn create_remote_task(&self, domain: &String, project: &String, task: &Task) -> Result<String, String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn create_remote_comment(&self, domain: &String, project: &String, task_id: &String, comment: &Comment) -> Result<String, String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn create_remote_label(&self, domain: &String, project: &String, task_id: &String, label: &Label) -> Result<(), String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
@@ -92,50 +100,50 @@ impl RemoteConnector for RedmineRemoteConnector {
         labels: Option<&Vec<Label>>,
         state: RemoteTaskState
     ) -> Result<(), String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn update_remote_comment(&self, domain: &String, project: &String, task_id: &String, comment_id: &String, text: &String) -> Result<(), String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn delete_remote_task(&self, domain: &String, project: &String, task_id: &String) -> Result<(), String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn delete_remote_comment(&self, domain: &String, project: &String, _task_id: &String, comment_id: &String) -> Result<(), String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 
     #[allow(unused)]
     fn delete_remote_label(&self, domain: &String, project: &String, task_id: &String, name: &String) -> Result<(), String> {
-        let redmine = get_redmine_instance(domain)?;
+        let redmine = get_redmine_instance(&self.context, domain)?;
 
         todo!()
     }
 }
 
-fn get_redmine_instance(domain: &String) -> Result<Redmine, String> {
+fn get_redmine_instance(context: &TaskContext, domain: &String) -> Result<Redmine, String> {
     let client = redmine_api::reqwest::blocking::Client::builder().use_rustls_tls().build()
         .map_err(|e| e.to_string())?;
-    let url = get_base_url(domain)?;
-    let api_key = get_api_key()?;
+    let url = get_base_url(&context, domain)?;
+    let api_key = get_api_key(&context)?;
     Redmine::new(client, url.parse().unwrap(), &*api_key).map_err(|e| e.to_string())
 }
 
-fn get_base_url(domain: &String) -> Result<String, String> {
-    match gittask::get_config_value("task.redmine.url") {
+fn get_base_url(context: &TaskContext, domain: &String) -> Result<String, String> {
+    match context.get_config_value("task.redmine.url") {
         Ok(url) => Ok(url),
         _ => match std::env::var("REDMINE_URL") {
             Ok(url) => Ok(url),
@@ -144,8 +152,8 @@ fn get_base_url(domain: &String) -> Result<String, String> {
     }
 }
 
-fn get_api_key() -> Result<String, String> {
-    match gittask::get_config_value("task.redmine.api_key") {
+fn get_api_key(context: &TaskContext) -> Result<String, String> {
+    match context.get_config_value("task.redmine.api_key") {
         Ok(key) => Ok(key),
         _ => std::env::var("REDMINE_API_KEY")
             .or_else(|_| std::env::var("REDMINE_TOKEN"))
