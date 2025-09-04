@@ -38,6 +38,24 @@ pub struct TaskContext {
     repository_path: String,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum TaskAction {
+    TaskCreate,
+    UpdateStatus,
+    SetProperty,
+    EditProperty,
+    DeleteProperty,
+    SearchReplaceProperty,
+    AddComment,
+    DeleteComment,
+    AddLabel,
+    UpdateLabel,
+    DeleteLabel,
+    // Maybe this just shows before and after task in this case?
+    // Ideally, supports backwards compatibility for older tasks.
+    UnknownUpdate
+}
+
 impl Task {
     pub fn new(name: String, description: String, status: String, author: Option<String>) -> Result<Task, &'static str> {
         if !name.is_empty() && !status.is_empty() {
@@ -56,7 +74,7 @@ impl Task {
                 props.insert("created".to_string(), get_current_timestamp().to_string());
             }
 
-            Ok(Task{ id: Some(id), props, comments: None, labels: None })
+            Ok(Task{ id: Some(id), props, comments: None, labels: None, })
         } else {
             Err("Name or status is empty")
         }
@@ -117,6 +135,7 @@ impl Task {
         &self.comments
     }
 
+    // TODO Can I get rid of the optional ID call here?
     pub fn add_comment(&mut self, id: Option<String>, mut props: HashMap<String, String>, text: String, author: Option<String>) -> Comment {
         if self.comments.is_none() {
             self.comments = Some(vec![]);
@@ -332,6 +351,46 @@ impl TaskContext {
         }
     }
 
+    pub fn get_task_history(&self, id: &str) -> Result<Vec<Option<TaskAction>>, String> {
+        let repo = map_err!(Repository::discover(&self.repository_path));
+        let task_ref = repo.find_reference(&self.get_ref_path());
+        match task_ref {
+            Ok(task_ref) => {
+                let task_tree = map_err!(task_ref.peel_to_tree());
+                let commit = task_ref.peel_to_commit().unwrap();
+                let parents = commit.parents();
+                let action_id = format!("action-{}", id);
+                let mut actions: Vec<Option<TaskAction>> = parents.map(|p| {
+                    let tree = p.tree().unwrap();
+                    match tree.get_name(action_id.as_str()) {
+                        None => None,
+                        Some(entry) => {
+                            let oid = entry.id();
+                            let blob = repo.find_blob(oid).unwrap();
+                            let content = blob.content();
+                            let task = serde_json::from_slice(content).unwrap();
+                            // task.action
+                            Some(task)
+                        }
+                    }
+                }).collect();
+                let latest_action = match task_tree.get_name(action_id.as_str()) {
+                    Some(entry) => {
+                        let oid = entry.id();
+                        let blob = map_err!(repo.find_blob(oid));
+                        let content = blob.content();
+                        let task  = serde_json::from_slice(content).unwrap();
+                        Some(task)
+                    },
+                    None => None,
+                };
+                actions.push(latest_action);
+                Ok(actions)
+            }
+            Err(e) => Err(e.message().to_owned())
+        }
+    }
+
     pub fn delete_tasks(&self, ids: &[&str]) -> Result<(), String> {
         let repo = map_err!(Repository::discover(&self.repository_path));
         let task_ref = map_err!(repo.find_reference(&self.get_ref_path()));
@@ -394,8 +453,13 @@ impl TaskContext {
         let string_content = serde_json::to_string(&task).unwrap();
         let content = string_content.as_bytes();
         let oid = map_err!(repo.blob(content));
+        let string_action = serde_json::to_string(&TaskAction::TaskCreate).unwrap(); // TODO
+        let action_content = string_action.as_bytes();
+        let action_oid = map_err!(repo.blob(action_content));
         let mut treebuilder = map_err!(repo.treebuilder(source_tree.as_ref()));
         map_err!(treebuilder.insert(&task.get_id().unwrap(), oid, FileMode::Blob.into()));
+        let action_name= format!("action-{}", &task.get_id().unwrap());
+        map_err!(treebuilder.insert(action_name, action_oid, FileMode::Blob.into()));
         let tree_oid = map_err!(treebuilder.write());
 
         let me = &map_err!(repo.signature());
@@ -411,7 +475,7 @@ impl TaskContext {
         Ok(task)
     }
 
-    pub fn update_task(&self, task: Task) -> Result<String, String> {
+    pub fn update_task_v2(&self, task: Task, action: Option<TaskAction>) -> Result<String, String> {
         let repo = map_err!(Repository::discover(&self.repository_path));
         let task_ref_result = map_err!(repo.find_reference(&self.get_ref_path()));
         let parent_commit = map_err!(task_ref_result.peel_to_commit());
@@ -421,6 +485,13 @@ impl TaskContext {
         let oid = map_err!(repo.blob(content));
         let mut treebuilder = map_err!(repo.treebuilder(Some(&source_tree)));
         map_err!(treebuilder.insert(&task.get_id().unwrap(), oid, FileMode::Blob.into()));
+        if let Some(action) = action {
+            let string_action = serde_json::to_string(&action).unwrap(); // TODO
+            let action_content = string_action.as_bytes();
+            let action_oid = map_err!(repo.blob(action_content));
+            let action_name= format!("action-{}", &task.get_id().unwrap());
+            map_err!(treebuilder.insert(action_name, action_oid, FileMode::Blob.into()));
+        }
         let tree_oid = map_err!(treebuilder.write());
 
         let me = &map_err!(repo.signature());
@@ -428,6 +499,26 @@ impl TaskContext {
         map_err!(repo.commit(Some(&self.get_ref_path()), me, me, format!("Update task {}", &task.get_id().unwrap()).as_str(), &map_err!(repo.find_tree(tree_oid)), &parents.iter().collect::<Vec<_>>()));
 
         Ok(task.get_id().unwrap())
+    }
+    pub fn update_task(&self, task: Task) -> Result<String, String> {
+        self.update_task_v2(task, None)
+        // let repo = map_err!(Repository::discover(&self.repository_path));
+        // let task_ref_result = map_err!(repo.find_reference(&self.get_ref_path()));
+        // let parent_commit = map_err!(task_ref_result.peel_to_commit());
+        // let source_tree = map_err!(task_ref_result.peel_to_tree());
+        // let string_content = serde_json::to_string(&task).unwrap();
+        // let content = string_content.as_bytes();
+        // let oid = map_err!(repo.blob(content));
+        // // let action = map_err!(repo.blob("UPDATE".as_bytes()));
+        // let mut treebuilder = map_err!(repo.treebuilder(Some(&source_tree)));
+        // map_err!(treebuilder.insert(&task.get_id().unwrap(), oid, FileMode::Blob.into()));
+        // let tree_oid = map_err!(treebuilder.write());
+        //
+        // let me = &map_err!(repo.signature());
+        // let parents = vec![parent_commit];
+        // map_err!(repo.commit(Some(&self.get_ref_path()), me, me, format!("Update task {}", &task.get_id().unwrap()).as_str(), &map_err!(repo.find_tree(tree_oid)), &parents.iter().collect::<Vec<_>>()));
+        //
+        // Ok(task.get_id().unwrap())
     }
 
     fn get_next_id(&self) -> Result<String, String> {
@@ -438,18 +529,18 @@ impl TaskContext {
         let mut result = 0;
 
         let _ = map_err!(task_tree.walk(TreeWalkMode::PreOrder, |_, entry| {
-        let entry_name = entry.name().unwrap();
-        match entry_name.parse::<i64>() {
-            Ok(id) => {
-                if id > result {
-                    result = id;
-                }
-            },
-            _ => return TreeWalkResult::Skip
-        };
+            let entry_name = entry.name().unwrap();
+            match entry_name.parse::<i64>() {
+                Ok(id) => {
+                    if id > result {
+                        result = id;
+                    }
+                },
+                _ => return TreeWalkResult::Skip
+            };
 
-        TreeWalkResult::Ok
-    }));
+            TreeWalkResult::Ok
+        }));
 
         Ok((result + 1).to_string())
     }
@@ -673,6 +764,60 @@ mod test {
         // Clean up
         let delete_result = context.delete_tasks(&[&id]);
         assert!(delete_result.is_ok());
+
+        std::fs::remove_dir_all(repo_dir).unwrap();
+    }
+
+    #[test]
+    fn test_get_task_history() {
+        let repo_dir = temp_dir().join(Uuid::new_v4().to_string());
+        std::fs::create_dir_all(repo_dir.clone()).unwrap();
+        let _repo = Repository::init(repo_dir.clone()).unwrap();
+        let context = TaskContext::new(repo_dir.display().to_string());
+
+        // Task Create
+        let id = context.get_next_id().unwrap_or_else(|_| "1".to_string());
+        let task = Task::construct_task(
+            "Test task".to_string(),
+            "Description goes here".to_string(),
+            "OPEN".to_string(),
+            context.get_current_user().unwrap(),
+            Some(get_current_timestamp())
+        );
+        let mut task = context.create_task(task).unwrap();
+
+        // Update task status
+        // Set a property
+        // Edit a property
+        // Delete a property
+        // Search & replace property values
+        // Add a comment
+        let comment_props = HashMap::from([("author".to_string(), "Some developer".to_string())]);
+        let _ = task.add_comment(
+            Some("1".to_string()),
+            comment_props,
+            "Test comment".to_string(),
+            context.get_current_user().unwrap(),
+        );
+        let task_id = context.update_task_v2(task, Some(TaskAction::AddComment)).unwrap();
+        // Delete a comment
+        // Add a label
+        // Update a label
+        // Delete a label
+        // Out of scope:
+        /// Pushing/pulling from remotes
+        /// Deleting tasks entirely (do this someday)
+
+        let task_history = context.get_task_history(&task_id);
+        assert!(task_history.is_ok());
+        let task_history = task_history.unwrap();
+        assert_eq!((&task_history).len(), 2);
+        let expected_task_history: Vec<Option<TaskAction>> = vec!(
+            Some(TaskAction::TaskCreate),
+            Some(TaskAction::AddComment),
+        );
+        assert_eq!(task_history, expected_task_history);
+
 
         std::fs::remove_dir_all(repo_dir).unwrap();
     }
