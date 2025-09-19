@@ -752,22 +752,36 @@ mod test {
         task.set_property("status", "IN_PROGRESS");
         context.update_task(task.clone()).unwrap();
         // Set a property
+        task.set_property("propKey", "propValue");
+        context.update_task(task.clone()).unwrap();
         // Edit a property
+        task.set_property("propKey", "propValue2");
+        context.update_task(task.clone()).unwrap();
         // Delete a property
+        task.delete_property("propKey");
+        context.update_task(task.clone()).unwrap();
         // Search & replace property values
+        // TODO This is a special case
         // Add a comment
         let comment_props = HashMap::from([("author".to_string(), "Some developer".to_string())]);
-        let _ = task.add_comment(
-            Some("1".to_string()),
+        let comment = task.add_comment(
+            None,
             comment_props,
             "Test comment".to_string(),
             context.get_current_user().unwrap(),
         );
-        let task_id = context.update_task(task).unwrap();
+        context.update_task(task.clone()).unwrap();
         // Delete a comment
+        task.delete_comment(&comment.id.expect("has an id")).unwrap();
+        context.update_task(task.clone()).unwrap();
         // Add a label
+        task.add_label("SomeLabel".to_string(), None, None);
+        context.update_task(task.clone()).unwrap();
         // Update a label
+        // TODO might not be implemented
         // Delete a label
+        task.delete_label("SomeLabel").unwrap();
+        let task_id = context.update_task(task.clone()).unwrap();
         // Out of scope:
         // 1. Pushing/pulling from remotes
         // 2. Deleting tasks entirely (do this someday)
@@ -776,16 +790,22 @@ mod test {
         let task_history = context.get_task_history(&task_id);
         assert!(task_history.is_ok());
         let mut task_history = task_history.unwrap();
-        assert_eq!((&task_history).len(), 3);
+        assert_eq!((&task_history).len(), 9);
         let expected_task_history: Vec<TaskChangeset> = vec!(
             TaskChangeset::new(vec![TaskAction::TaskCreate]),
             TaskChangeset::new(vec![TaskAction::UpdateStatus]),
+            TaskChangeset::new(vec![TaskAction::SetProperty]),
+            TaskChangeset::new(vec![TaskAction::EditProperty]),
+            TaskChangeset::new(vec![TaskAction::DeleteProperty]),
             TaskChangeset::new(vec![TaskAction::AddComment]),
+            TaskChangeset::new(vec![TaskAction::DeleteComment]),
+            TaskChangeset::new(vec![TaskAction::AddLabel]),
+            TaskChangeset::new(vec![TaskAction::DeleteLabel]),
         );
         assert_eq!(task_history, expected_task_history);
 
         let latest = task_history.pop().expect("task history has len 3");
-        assert_eq!(latest, TaskChangeset::new(vec![TaskAction::AddComment]));
+        assert_eq!(latest, TaskChangeset::new(vec![TaskAction::DeleteLabel]));
 
         std::fs::remove_dir_all(repo_dir).unwrap();
     }
